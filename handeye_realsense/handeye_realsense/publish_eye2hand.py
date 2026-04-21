@@ -22,7 +22,7 @@ class TransformPublisher(Node):
     def __init__(self):
         super().__init__('transform_publisher')
         
-        with open('src/handeye_realsense/config.yaml', 'r') as file:
+        with open('handeye_calibration_ros2/handeye_realsense/config.yaml', 'r') as file:
             config = yaml.safe_load(file)
         self.handeye_result_file_name = config["handeye_result_file_name"]
         self.base_link = config["base_link"]
@@ -56,50 +56,6 @@ class TransformPublisher(Node):
 
         timer_period = 0.1  # seconds
         self.timer = self.create_timer(timer_period, self.publish_handeye_transform)
-
-        self.subscription_tf = self.create_subscription(TFMessage, '/tf', self.listener_callback_tf, 10)
-        self.subscription_tf_static = self.create_subscription(TFMessage,'/tf_static', self.listener_callback_tf_static, qos_profile)
-
-        self.transformations = {}
-
-    def quaternion_to_rotation_matrix(self, x, y, z, w):
-        """ Convert a quaternion into a full three-dimensional rotation matrix. """
-        return R.from_quat([x, y, z, w]).as_matrix()
-
-    def listener_callback_tf(self, msg):
-        """ Handle incoming transform messages. """
-        for transform in msg.transforms:
-            if transform.child_frame_id and transform.header.frame_id:
-                self.transformations[(transform.header.frame_id, transform.child_frame_id)] = transform
-
-    def listener_callback_tf_static(self, msg):
-        """ Handle incoming transform messages. """
-        for transform in msg.transforms:
-            if transform.child_frame_id and transform.header.frame_id:
-                self.transformations[(transform.header.frame_id, transform.child_frame_id)] = transform
-        print("Subcribed to /tf_static successfully")
-
-
-    def get_full_transformation_matrix(self):
-        T = np.eye(4)  # Start with the identity matrix
-        link_order = [
-            ('world','lbr/world'), ('lbr/world','lbr/link_0'),
-            ('lbr/link_0', 'lbr/link_1'), ('lbr/link_1', 'lbr/link_2'), 
-            ('lbr/link_2', 'lbr/link_3'), ('lbr/link_3', 'lbr/link_4'), 
-            ('lbr/link_4', 'lbr/link_5'), ('lbr/link_5', 'lbr/link_6'), 
-            ('lbr/link_6', 'lbr/link_7'), ('lbr/link_7', 'lbr/link_ee'),
-        ]
-        for (frame_id, child_frame_id) in link_order:
-            if (frame_id, child_frame_id) in self.transformations:
-                trans = self.transformations[(frame_id, child_frame_id)].transform
-                translation = [trans.translation.x, trans.translation.y, trans.translation.z]
-                rotation = [trans.rotation.x, trans.rotation.y, trans.rotation.z, trans.rotation.w]
-                T_local = np.eye(4)
-                T_local[:3, :3] = self.quaternion_to_rotation_matrix(*rotation)
-                T_local[:3, 3] = translation
-                T = np.dot(T, T_local)
-                
-        return T
 
     def publish_handeye_transform(self):
         transform_msg = TransformStamped()

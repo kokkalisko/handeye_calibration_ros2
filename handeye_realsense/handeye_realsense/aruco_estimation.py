@@ -46,7 +46,7 @@ class ArucoNode(Node):
     def __init__(self):
         super().__init__('aruco_node')
 
-        with open('src/handeye_realsense/config.yaml', 'r') as file:
+        with open('handeye_calibration_ros2/handeye_realsense/config.yaml', 'r') as file:
             config = yaml.safe_load(file)
         aruco_dictionary_name = config["aruco_dictionary_name"]
         self.aruco_marker_name = config["aruco_marker_name"]

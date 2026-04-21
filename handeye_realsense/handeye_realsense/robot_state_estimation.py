@@ -25,7 +25,7 @@ class RobotTransformNode(Node):
         self.pose_count = 0
         self.subscription_keypress = self.create_subscription(String, 'keypress_topic', self.keypress_callback, 10)
         
-        with open('src/handeye_realsense/config.yaml', 'r') as file:
+        with open('handeye_calibration_ros2/handeye_realsense/config.yaml', 'r') as file:
             config = yaml.safe_load(file)
         self.robot_data_file_name = config["robot_data_file_name"]
         self.base_link = config["base_link"]
@@ -52,11 +52,11 @@ class RobotTransformNode(Node):
     def get_full_transformation_matrix(self):
         T = np.eye(4)  # Start with the identity matrix
         link_order = [
-            ('lbr/link_0', 'lbr/link_1'), ('lbr/link_1', 'lbr/link_2'), 
-            ('lbr/link_2', 'lbr/link_3'), ('lbr/link_3', 'lbr/link_4'), 
-            ('lbr/link_4', 'lbr/link_5'), ('lbr/link_5', 'lbr/link_6'), 
-            ('lbr/link_6', 'lbr/link_7'), 
-            ('lbr/link_7', 'lbr/link_ee'),
+            ('base_link', 'base_link_inertia'), ('base_link_inertia', 'shoulder_link'), 
+            ('shoulder_link', 'upper_arm_link'), ('upper_arm_link', 'forearm_link'), 
+            ('forearm_link', 'wrist_1_link'), ('wrist_1_link', 'wrist_2_link'), 
+            ('wrist_2_link', 'wrist_3_link'), ('wrist_3_link', 'flange'),
+            ('flange', 'tool0')
         ]
         for (frame_id, child_frame_id) in link_order:
             if (frame_id, child_frame_id) in self.transformations:

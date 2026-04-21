@@ -16,7 +16,7 @@ class HandEyeCalibrationNode(Node):
         super().__init__('hand_eye_calibration_node')
         self.get_logger().info("Starting Hand-Eye Calibration Node")
         
-        with open('src/handeye_realsense/config.yaml', 'r') as file:
+        with open('handeye_calibration_ros2/handeye_realsense/config.yaml', 'r') as file:
             config = yaml.safe_load(file)
         self.robot_data_file_name = config["robot_data_file_name"]
         self.marker_data_file_name = config["marker_data_file_name"]
