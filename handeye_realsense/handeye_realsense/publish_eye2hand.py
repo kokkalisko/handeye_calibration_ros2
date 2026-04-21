@@ -22,13 +22,17 @@ class TransformPublisher(Node):
     def __init__(self):
         super().__init__('transform_publisher')
         
-        with open('handeye_calibration_ros2/handeye_realsense/config.yaml', 'r') as file:
-            config = yaml.safe_load(file)
-        self.handeye_result_file_name = config["handeye_result_file_name"]
-        self.base_link = config["base_link"]
-        self.ee_link = config["ee_link"]
-        self.world_frame = config["world_frame"]
-        self.calculated_camera_optical_frame_name = config["calculated_camera_optical_frame_name"]
+        self.declare_parameter('handeye_result_file_name', '')
+        self.declare_parameter('base_link', '')
+        self.declare_parameter('ee_link', '')
+        self.declare_parameter('world_frame', '')
+        self.declare_parameter('calculated_camera_optical_frame_name', '')
+
+        self.handeye_result_file_name = self.get_parameter('handeye_result_file_name').get_parameter_value().string_value
+        self.base_link = self.get_parameter('base_link').get_parameter_value().string_value
+        self.ee_link = self.get_parameter('ee_link').get_parameter_value().string_value
+        self.world_frame = self.get_parameter('world_frame').get_parameter_value().string_value
+        self.calculated_camera_optical_frame_name = self.get_parameter('calculated_camera_optical_frame_name').get_parameter_value().string_value
         
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
 

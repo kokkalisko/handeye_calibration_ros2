@@ -46,16 +46,23 @@ class ArucoNode(Node):
     def __init__(self):
         super().__init__('aruco_node')
 
-        with open('handeye_calibration_ros2/handeye_realsense/config.yaml', 'r') as file:
-            config = yaml.safe_load(file)
-        aruco_dictionary_name = config["aruco_dictionary_name"]
-        self.aruco_marker_name = config["aruco_marker_name"]
-        self.aruco_marker_side_length = config["aruco_marker_side_length"]
-        self.camera_calibration_parameters_filename = config["camera_calibration_parameters_filename"]
-        self.image_topic = config["image_topic"]
-        self.calculated_camera_optical_frame_name = config["calculated_camera_optical_frame_name"]
-        self.marker_data_file_name = config["marker_data_file_name"]
-        self.image_filename = config["image_filename"]
+        self.declare_parameter('aruco_dictionary_name', '')
+        self.declare_parameter('aruco_marker_name', '')
+        self.declare_parameter('aruco_marker_side_length', 0.1)
+        self.declare_parameter('camera_calibration_parameters_filename', '')
+        self.declare_parameter('image_topic', '')
+        self.declare_parameter('calculated_camera_optical_frame_name', '')
+        self.declare_parameter('marker_data_file_name', '')
+        self.declare_parameter('image_filename', '')
+
+        aruco_dictionary_name = self.get_parameter('aruco_dictionary_name').get_parameter_value().string_value
+        self.aruco_marker_name = self.get_parameter('aruco_marker_name').get_parameter_value().string_value
+        self.aruco_marker_side_length = self.get_parameter('aruco_marker_side_length').get_parameter_value().double_value
+        self.camera_calibration_parameters_filename = self.get_parameter('camera_calibration_parameters_filename').get_parameter_value().string_value
+        self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
+        self.calculated_camera_optical_frame_name = self.get_parameter('calculated_camera_optical_frame_name').get_parameter_value().string_value
+        self.marker_data_file_name = self.get_parameter('marker_data_file_name').get_parameter_value().string_value
+        self.image_filename = self.get_parameter('image_filename').get_parameter_value().string_value
 
         # Check that we have a valid ArUco marker
         if ARUCO_DICT.get(aruco_dictionary_name, None) is None:

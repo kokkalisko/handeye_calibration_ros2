@@ -5,70 +5,57 @@ Contact: https://shengyangzhuang.github.io/
 """
 import rclpy
 from rclpy.node import Node
-from tf2_msgs.msg import TFMessage
 from scipy.spatial.transform import Rotation as R
-from rclpy.qos import QoSProfile, DurabilityPolicy
 from std_msgs.msg import String
 
 import yaml
 import numpy as np
 
-# Create a QoS profile for subscribing to /tf_static
-qos_profile = QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
 
 class RobotTransformNode(Node):
     def __init__(self):
         super().__init__('robot_transform_node')
-        self.subscription_tf = self.create_subscription(TFMessage, '/tf', self.listener_callback_tf, 10)
-        self.subscription_tf_static = self.create_subscription(TFMessage,'/tf_static', self.listener_callback_tf_static, qos_profile)
-        self.transformations = {}
         self.pose_count = 0
         self.subscription_keypress = self.create_subscription(String, 'keypress_topic', self.keypress_callback, 10)
         
-        with open('handeye_calibration_ros2/handeye_realsense/config.yaml', 'r') as file:
-            config = yaml.safe_load(file)
-        self.robot_data_file_name = config["robot_data_file_name"]
-        self.base_link = config["base_link"]
-        self.ee_link = config["ee_link"]
+        self.declare_parameter('robot_data_file_name', '')
+        self.declare_parameter('base_link', '')
+        self.declare_parameter('ee_link', '')
+
+        self.robot_data_file_name = self.get_parameter('robot_data_file_name').get_parameter_value().string_value
+        self.base_link = self.get_parameter('base_link').get_parameter_value().string_value
+        self.ee_link = self.get_parameter('ee_link').get_parameter_value().string_value
+
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
     def quaternion_to_rotation_matrix(self, x, y, z, w):
         """ Convert a quaternion into a full three-dimensional rotation matrix. """
         return R.from_quat([x, y, z, w]).as_matrix()
 
-    def listener_callback_tf(self, msg):
-        """ Handle incoming transform messages. """
-        for transform in msg.transforms:
-            if transform.child_frame_id and transform.header.frame_id:
-                self.transformations[(transform.header.frame_id, transform.child_frame_id)] = transform
-
-    def listener_callback_tf_static(self, msg):
-        """ Handle incoming transform messages. """
-        for transform in msg.transforms:
-            if transform.child_frame_id and transform.header.frame_id:
-                self.transformations[(transform.header.frame_id, transform.child_frame_id)] = transform
-        self.get_logger().info("Subcribed to /tf_static successfully")
-
-
     def get_full_transformation_matrix(self):
-        T = np.eye(4)  # Start with the identity matrix
-        link_order = [
-            ('base_link', 'base_link_inertia'), ('base_link_inertia', 'shoulder_link'), 
-            ('shoulder_link', 'upper_arm_link'), ('upper_arm_link', 'forearm_link'), 
-            ('forearm_link', 'wrist_1_link'), ('wrist_1_link', 'wrist_2_link'), 
-            ('wrist_2_link', 'wrist_3_link'), ('wrist_3_link', 'flange'),
-            ('flange', 'tool0')
-        ]
-        for (frame_id, child_frame_id) in link_order:
-            if (frame_id, child_frame_id) in self.transformations:
-                trans = self.transformations[(frame_id, child_frame_id)].transform
-                translation = [trans.translation.x, trans.translation.y, trans.translation.z]
-                rotation = [trans.rotation.x, trans.rotation.y, trans.rotation.z, trans.rotation.w]
-                T_local = np.eye(4)
-                T_local[:3, :3] = self.quaternion_to_rotation_matrix(*rotation)
-                T_local[:3, 3] = translation
-                T = np.dot(T, T_local)
-
-        return T
+        try:
+            now = rclpy.time.Time()
+            trans = self.tf_buffer.lookup_transform(
+                self.base_link,
+                self.ee_link,
+                now)
+            
+            translation = [trans.transform.translation.x, trans.transform.translation.y, trans.transform.translation.z]
+            rotation = [trans.transform.rotation.x, trans.transform.rotation.y, trans.transform.rotation.z, trans.transform.rotation.w]
+            
+            T = np.eye(4)
+            T[:3, :3] = self.quaternion_to_rotation_matrix(*rotation)
+            T[:3, 3] = translation
+            
+            return T
+        except TransformException as ex:
+            self.get_logger().info(
+                f'Could not transform {self.base_link} to {self.ee_link}: {ex}')
+            return None
 
     def save_transformation_to_yaml(self, rotation_matrix, translation_vector):
         """ Append the rotation matrix and translation vector to a YAML file and print them. """
@@ -102,9 +89,10 @@ class RobotTransformNode(Node):
         key = msg.data
         if key == 'q':
             T = self.get_full_transformation_matrix()
-            R_gripper2base = T[:3, :3]
-            t_gripper2base = T[:3, 3]
-            self.save_transformation_to_yaml(R_gripper2base, t_gripper2base)
+            if T is not None:
+                R_gripper2base = T[:3, :3]
+                t_gripper2base = T[:3, 3]
+                self.save_transformation_to_yaml(R_gripper2base, t_gripper2base)
         elif key == 'e':
             self.get_logger().info("Ending program...")
             rclpy.shutdown()
