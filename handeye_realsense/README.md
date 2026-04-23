@@ -27,7 +27,7 @@ A video of the full process can be viewed [here](https://youtu.be/EUSxnzzP8qk?si
 
 4. **Specifying the parameters of your robot**
 
-   Under `handeye_realsense/config.yaml` file, modify the `aruco_marker_side_length`, `image_topic`, and relevant robot link names as per your setups.
+   Under `handeye_realsense/config.yaml` file, modify the `marker_side_length`, `image_topic`, and relevant robot link names as per your setups.
 
 5. **Bring up the robot and camera**
 

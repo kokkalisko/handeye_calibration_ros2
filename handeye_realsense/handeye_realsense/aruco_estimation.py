@@ -21,8 +21,8 @@ import yaml
 # Create a QoS profile for subscribing to /tf_static
 qos_profile = QoSProfile(depth=100, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
-# ArUco dictionary lookup
-ARUCO_DICT = {
+# ArUco and AprilTag dictionary lookup
+MARKER_DICT = {
     "DICT_4X4_50": cv2.aruco.DICT_4X4_50,
     "DICT_4X4_100": cv2.aruco.DICT_4X4_100,
     "DICT_4X4_250": cv2.aruco.DICT_4X4_250,
@@ -39,34 +39,38 @@ ARUCO_DICT = {
     "DICT_7X7_100": cv2.aruco.DICT_7X7_100,
     "DICT_7X7_250": cv2.aruco.DICT_7X7_250,
     "DICT_7X7_1000": cv2.aruco.DICT_7X7_1000,
-    "DICT_ARUCO_ORIGINAL": cv2.aruco.DICT_ARUCO_ORIGINAL
+    "DICT_ARUCO_ORIGINAL": cv2.aruco.DICT_ARUCO_ORIGINAL,
+    "DICT_APRILTAG_16h5": cv2.aruco.DICT_APRILTAG_16h5,
+    "DICT_APRILTAG_25h9": cv2.aruco.DICT_APRILTAG_25h9,
+    "DICT_APRILTAG_36h10": cv2.aruco.DICT_APRILTAG_36h10,
+    "DICT_APRILTAG_36h11": cv2.aruco.DICT_APRILTAG_36h11
 }
 
 class ArucoNode(Node):
     def __init__(self):
         super().__init__('aruco_node')
 
-        self.declare_parameter('aruco_dictionary_name', '')
-        self.declare_parameter('aruco_marker_name', '')
-        self.declare_parameter('aruco_marker_side_length', 0.1)
+        self.declare_parameter('marker_dictionary_name', '')
+        self.declare_parameter('marker_name', '')
+        self.declare_parameter('marker_side_length', 0.1)
         self.declare_parameter('camera_calibration_parameters_filename', '')
         self.declare_parameter('image_topic', '')
         self.declare_parameter('calculated_camera_optical_frame_name', '')
         self.declare_parameter('marker_data_file_name', '')
         self.declare_parameter('image_filename', '')
 
-        aruco_dictionary_name = self.get_parameter('aruco_dictionary_name').get_parameter_value().string_value
-        self.aruco_marker_name = self.get_parameter('aruco_marker_name').get_parameter_value().string_value
-        self.aruco_marker_side_length = self.get_parameter('aruco_marker_side_length').get_parameter_value().double_value
+        marker_dictionary_name = self.get_parameter('marker_dictionary_name').get_parameter_value().string_value
+        self.marker_name = self.get_parameter('marker_name').get_parameter_value().string_value
+        self.marker_side_length = self.get_parameter('marker_side_length').get_parameter_value().double_value
         self.camera_calibration_parameters_filename = self.get_parameter('camera_calibration_parameters_filename').get_parameter_value().string_value
         self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
         self.calculated_camera_optical_frame_name = self.get_parameter('calculated_camera_optical_frame_name').get_parameter_value().string_value
         self.marker_data_file_name = self.get_parameter('marker_data_file_name').get_parameter_value().string_value
         self.image_filename = self.get_parameter('image_filename').get_parameter_value().string_value
 
-        # Check that we have a valid ArUco marker
-        if ARUCO_DICT.get(aruco_dictionary_name, None) is None:
-            self.get_logger().error(f"ArUCo tag of '{aruco_dictionary_name}' is not supported")
+        # Check that we have a valid marker
+        if MARKER_DICT.get(marker_dictionary_name, None) is None:
+            self.get_logger().error(f"Marker tag of '{marker_dictionary_name}' is not supported")
             return
 
         # Load the camera parameters from the saved file
@@ -75,10 +79,10 @@ class ArucoNode(Node):
         self.dst = cv_file.getNode('D').mat()
         cv_file.release()
 
-        # Load the ArUco dictionary
-        self.get_logger().info(f"Detecting '{aruco_dictionary_name}' marker.")
-        self.this_aruco_dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT[aruco_dictionary_name])
-        self.this_aruco_parameters = cv2.aruco.DetectorParameters()
+        # Load the marker dictionary
+        self.get_logger().info(f"Detecting '{marker_dictionary_name}' marker.")
+        self.this_marker_dictionary = cv2.aruco.getPredefinedDictionary(MARKER_DICT[marker_dictionary_name])
+        self.this_marker_parameters = cv2.aruco.DetectorParameters()
 
         # Create the subscriber
         self.subscription = self.create_subscription(Image, self.image_topic, self.listener_callback, 10)
@@ -100,11 +104,11 @@ class ArucoNode(Node):
 
     def listener_callback(self, data):
         current_frame = self.bridge.imgmsg_to_cv2(data)
-        corners, marker_ids, rejected = cv2.aruco.detectMarkers(current_frame, self.this_aruco_dictionary, parameters=self.this_aruco_parameters)
+        corners, marker_ids, rejected = cv2.aruco.detectMarkers(current_frame, self.this_marker_dictionary, parameters=self.this_marker_parameters)
 
         if marker_ids is not None:
             cv2.aruco.drawDetectedMarkers(current_frame, corners, marker_ids)
-            rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(corners, self.aruco_marker_side_length, self.mtx, self.dst)
+            rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(corners, self.marker_side_length, self.mtx, self.dst)
             
             for i, marker_id in enumerate(marker_ids):
                 # Create the coordinate transform
@@ -112,7 +116,7 @@ class ArucoNode(Node):
                 t_marker_to_camera.header.stamp = self.get_clock().now().to_msg()
 
                 t_marker_to_camera.header.frame_id = self.calculated_camera_optical_frame_name
-                t_marker_to_camera.child_frame_id = self.aruco_marker_name
+                t_marker_to_camera.child_frame_id = self.marker_name
 
                 # Store the translation (i.e. position) information
                 t_marker_to_camera.transform.translation.x = tvecs[i][0][0]

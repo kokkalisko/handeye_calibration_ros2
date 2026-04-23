@@ -1,0 +1,17 @@
+/**:
+  ros__parameters:
+    marker_dictionary_name: "DICT_APRILTAG_36h11"
+    marker_side_length: 0.100
+    camera_calibration_parameters_filename: "/home/konstantinos/handeye_calibration_ros2/handeye_realsense/config/realsense_info.yaml"
+    image_topic: "/camera/camera/color/image_raw"
+    marker_name: "marker"
+    calculated_camera_optical_frame_name: "camera/color/optical_frame"
+    marker_data_file_name: "handeye_realsense/resource/marker_data_realsense.yaml"
+    image_filename: "handeye_realsense/resource/marker_pose_realsense_{pose_count}.jpg"
+    robot_data_file_name: "handeye_realsense/resource/robot_data_realsense.yaml"
+    handeye_result_file_name: "handeye_realsense/resource/handeye_result_realsense.yaml"
+    handeye_result_profile_file_name: "handeye_realsense/resource/handeye_result_realsense_profile.yaml"
+
+    base_link: "base_link"
+    ee_link: "tool0"
+    world_frame: "world"
