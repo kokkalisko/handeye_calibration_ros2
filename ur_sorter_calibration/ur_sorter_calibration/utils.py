@@ -1,3 +1,8 @@
+import tf2_ros
+from rclpy.duration import Duration
+from geometry_msgs.msg import Quaternion
+
+import numpy as np
 import cv2
 import struct
 from scipy.spatial.transform import Rotation
@@ -53,3 +58,69 @@ def rvec_to_quat(rvec):
     r = Rotation.from_matrix(rotation_matrix)
     quat = r.as_quat()
     return quat
+
+def transform_pose_between_frames(pose, target_frame, tf_buffer, timeout=1.0):
+    try:
+        # ---------------------------------------------------
+        # Wait until transform is available
+        # ---------------------------------------------------
+
+        can_transform = tf_buffer.can_transform(
+            target_frame,
+            pose.header.frame_id,
+            pose.header.stamp,
+            timeout=Duration(seconds=timeout)
+        )
+
+        if not can_transform:
+            return None, f'Transform from {pose.header.frame_id} to {target_frame} not available within {timeout} seconds.'
+        
+        # ---------------------------------------------------
+        # Transform pose
+        # ---------------------------------------------------
+
+        transformed_pose = tf_buffer.transform(
+            pose,
+            target_frame,
+            timeout=Duration(seconds=timeout)
+        )
+
+        return transformed_pose, None
+
+    except tf2_ros.LookupException as e:
+        return None, f'LookupException: {str(e)}'
+    except tf2_ros.ConnectivityException as e:
+        return None, f'ConnectivityException: {str(e)}'
+    except tf2_ros.ExtrapolationException as e:
+        return None, f'ExtrapolationException: {str(e)}'
+    except Exception as e:
+        return None, f'Unexpected exception: {str(e)}'
+    
+def normalize(v):
+    return v / np.linalg.norm(v)
+
+def construct_frame(pA, RA, pB):
+    # Desired X direction
+    x = normalize(pB - pA)
+
+    # Z axis from frame A
+    z = normalize(RA[:, 2])
+
+    # Orthogonal Y
+    y = normalize(np.cross(z, x))
+
+    # Recompute orthogonal X
+    x = np.cross(y, z)
+
+    # Rotation matrix
+    R = np.column_stack((x, y, z))
+
+    # Quaternion    
+    r = Rotation.from_matrix(R)
+    quat = r.as_quat()  # [x
+
+    return pA, quat
+
+def quaternion_to_matrix(q: Quaternion):
+    rot = Rotation.from_quat([q.x, q.y, q.z, q.w])
+    return rot.as_matrix()

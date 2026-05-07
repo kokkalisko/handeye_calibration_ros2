@@ -3,12 +3,12 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
-from ur_sorter_calibration.utils import MARKER_DICT, rvec_to_quat
+from ur_sorter_calibration.utils import *
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import TransformStamped
-from tf2_ros import TransformBroadcaster, StaticTransformBroadcaster
+from geometry_msgs.msg import TransformStamped, PoseStamped
+from tf2_ros import TransformBroadcaster, StaticTransformBroadcaster, Buffer, TransformListener
 import numpy as np
 import cv2
 from cv_bridge import CvBridge
@@ -28,6 +28,7 @@ class MarkerReader(Node):
         self.declare_parameter('marker_side_length', 0.1)
         self.declare_parameter('camera_calibration_parameters_filename', '')
         self.declare_parameter('image_topic', '')
+        self.declare_parameter('base_link', 'base_link')
 
         marker_dictionary_name = self.get_parameter('marker_dictionary_name').get_parameter_value().string_value
         self.marker_name = self.get_parameter('marker_name').get_parameter_value().string_value
@@ -37,6 +38,7 @@ class MarkerReader(Node):
         flange_to_camera = self.get_parameter('flange_to_camera').get_parameter_value().double_array_value
         self.camera_optical_frame = self.get_parameter('camera_optical_frame').get_parameter_value().string_value
         self.flange_link = self.get_parameter('flange_link').get_parameter_value().string_value
+        self.base_link = self.get_parameter('base_link').get_parameter_value().string_value
 
         # Check that we have a valid marker
         if MARKER_DICT.get(marker_dictionary_name, None) is None:
@@ -69,6 +71,10 @@ class MarkerReader(Node):
         # Create the transform broadcaster to publish the transform from the marker to the camera
         self.tfbroadcaster = TransformBroadcaster(self)
 
+        # Create TF buffer and listener for transformations
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
         # Used to convert between ROS and OpenCV images
         self.bridge = CvBridge()
 
@@ -86,7 +92,7 @@ class MarkerReader(Node):
         self.marker_entries = []
         self.encoder_entries = []
         self.latest_points = []
-
+        self.tracking_frame = None
 
     def publish_static_flange_to_camera(self, flange_to_camera):
         if len(flange_to_camera) != 7:
@@ -196,20 +202,26 @@ class MarkerReader(Node):
             # TODO: Check if not value is None before saving
             # if rvecs is not None and tvecs is not None:
             if marker_ids is not None and len(marker_ids) > 0:
+                self.get_logger().info(f"Detected markers: {marker_ids}")
+
                 image_filename = self.image_filename_pattern.format(pose_count=self.pose_count)
                 marker_entry = self.save_marker_data(marker_ids, rvecs, tvecs, image_filename)
-                self.save_image(current_frame)
-                self.latest_marker_entry = marker_entry
-                self.get_logger().info(f"Saved marker transform and yaml entry.")
-                
-                self.keypress_publisher.publish(String(data='q'))
-                self.pose_count += 1
+
+                if marker_entry is not None:
+                    self.save_image(current_frame)
+                    self.latest_marker_entry = marker_entry
+                    self.get_logger().info(f"Saved marker transform and yaml entry.")
+                    
+                    self.keypress_publisher.publish(String(data='q'))
+                    self.pose_count += 1
+                else:
+                    self.get_logger().warning("Marker entry was None, skipping save and synchronization.")
         elif key == ord('e'):
             self.get_logger().info("Ending program...")
             self.keypress_publisher.publish(String(data='e'))
             cv2.destroyAllWindows()  # Close all OpenCV windows
             rclpy.shutdown()  # Shutdown ROS client library for Python
-        elif key == ord('c'):
+        elif key == ord('t'):
             self.get_logger().info("Performing calibration with the last 2 datapoints...")
             if len(self.latest_points) < 2:
                 self.get_logger().info("Not enough data points for calibration.")
@@ -218,7 +230,7 @@ class MarkerReader(Node):
                 marker_entry2, enc_count2 = self.latest_points[-1]
                 shared_markers = self.match_markers(marker_entry1, enc_count1, marker_entry2, enc_count2)
                 if shared_markers:
-                    self.calibrate(shared_markers)
+                    self.tracking_frame_calibrate(shared_markers)
 
     def match_markers(self, marker_entry1, enc_count1, marker_entry2, enc_count2):
         if marker_entry1 is None or marker_entry2 is None:
@@ -239,13 +251,11 @@ class MarkerReader(Node):
             matched_marker_data.append({
                 'marker_id': marker_id,
                 'entry1': {
-                    'tvec': m1['tvec'],
-                    'quat': m1['quat'],
+                    'pose': m1['pose'],
                     'encoder_count': enc_count1,
                 },
                 'entry2': {
-                    'tvec': m2['tvec'],
-                    'quat': m2['quat'],
+                    'pose': m2['pose'],
                     'encoder_count': enc_count2,
                 },
             })
@@ -260,10 +270,54 @@ class MarkerReader(Node):
 
         return matched_marker_data
 
-    def calibrate(self, matched_markers):
+    def tracking_frame_calibrate(self, matched_markers):
         # Select the first matched marker for calibration
         marker_data = matched_markers[0]
         marker_id = marker_data['marker_id']
+
+        # Extract the relevant data for calibration
+        first_point = marker_data['entry1']
+        second_point = marker_data['entry2']
+
+        pA = np.array([
+            first_point['pose'].pose.position.x,
+            first_point['pose'].pose.position.y,
+            first_point['pose'].pose.position.z])
+        RA = quaternion_to_matrix(first_point['pose'].pose.orientation)
+
+        pB = np.array([
+            second_point['pose'].pose.position.x,
+            second_point['pose'].pose.position.y,
+            second_point['pose'].pose.position.z])
+
+        # Construct the frame
+        trans, quat = construct_frame(pA, RA, pB)
+
+        self.get_logger().info(f"Tracking frame calibration result for marker:")
+        self.get_logger().info(f"Translation: {trans}")
+        self.get_logger().info(f"Quaternion: {quat}")
+
+        self.tracking_frame = (trans, quat)
+        self.write_frame_yaml(trans, quat)
+
+    def write_frame_yaml(self, trans, quat, frame_name='tracking_frame'):
+        frame_list = [
+            float(trans[0]),
+            float(trans[1]),
+            float(trans[2]),
+            float(quat[0]),
+            float(quat[1]),
+            float(quat[2]),
+            float(quat[3]),
+        ]
+        results_frames_file = self.image_folder.parent / 'results_frames.yaml'
+
+        try:
+            with open(results_frames_file, 'w') as yaml_file:
+                yaml.safe_dump({frame_name: frame_list}, yaml_file, sort_keys=False)
+            self.get_logger().info(f'Wrote {frame_name} to {results_frames_file}')
+        except OSError as exc:
+            self.get_logger().error(f'Failed to write {frame_name} YAML: {exc}')
 
     def encoder_callback(self, msg):
         self.get_logger().info(f"Received encoder value: {msg.data}")
@@ -289,10 +343,28 @@ class MarkerReader(Node):
 
         marker_list = []
         for i, marker_id in enumerate(marker_ids.flatten()):
+            # Create PoseStamped for the marker in camera frame
+            pose = PoseStamped()
+            pose.header.frame_id = self.camera_optical_frame
+            pose.header.stamp = self.get_clock().now().to_msg()
+            pose.pose.position.x = float(tvecs[i][0][0])
+            pose.pose.position.y = float(tvecs[i][0][1])
+            pose.pose.position.z = float(tvecs[i][0][2])
+            quat = rvec_to_quat(rvecs[i])
+            pose.pose.orientation.x = float(quat[0])
+            pose.pose.orientation.y = float(quat[1])
+            pose.pose.orientation.z = float(quat[2])
+            pose.pose.orientation.w = float(quat[3])
+
+            # Transform to base_link frame
+            transformed_pose, error = transform_pose_between_frames(pose, self.base_link, self.tf_buffer)
+            if error:
+                self.get_logger().error(f'Failed to transform marker {marker_id} to {self.base_link}: {error}')
+                return None
+
             marker_list.append({
                 'marker_id': int(marker_id),
-                'tvec': tvecs[i][0].tolist(),
-                'quat': rvec_to_quat(rvecs[i]).tolist(),
+                'pose': transformed_pose,
             })
 
         entry = {
