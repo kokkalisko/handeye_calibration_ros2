@@ -8,14 +8,12 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster, StaticTransformBroadcaster
-import transforms3d as tf_transformations
 from scipy.spatial.transform import Rotation as R
 from rclpy.qos import QoSProfile, DurabilityPolicy
 from cv_bridge import CvBridge
 from std_msgs.msg import String
 
 import cv2
-import numpy as np
 import yaml
 
 # Create a QoS profile for subscribing to /tf_static
@@ -96,11 +94,6 @@ class ArucoNode(Node):
 
         # Used to convert between ROS and OpenCV images
         self.bridge = CvBridge()
-
-
-    def quaternion_to_rotation_matrix(self, x, y, z, w):
-        """ Convert a quaternion into a full three-dimensional rotation matrix. """
-        return R.from_quat([x, y, z, w]).as_matrix()    
 
     def listener_callback(self, data):
         current_frame = self.bridge.imgmsg_to_cv2(data)

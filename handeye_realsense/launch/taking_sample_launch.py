@@ -24,8 +24,8 @@ def generate_launch_description():
         ),
         Node(
             package='handeye_realsense',
-            executable='aruco',
-            name='aruco_estimation',
+            executable='marker',
+            name='marker_estimation',
             parameters=[config]
         ),
     ])
