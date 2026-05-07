@@ -7,3 +7,10 @@ __pycache__/
 build/
 install/
 log/
+
+# Resource files
+ur_sorter_calibration/resource/
+handeye_realsense/resource/
+
+# Misc
+.vscode/
