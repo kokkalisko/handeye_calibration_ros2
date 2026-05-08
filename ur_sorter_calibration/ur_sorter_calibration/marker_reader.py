@@ -210,6 +210,7 @@ class MarkerReader(Node):
                 if marker_entry is not None:
                     self.save_image(current_frame)
                     self.latest_marker_entry = marker_entry
+                    self.latest_points.append(marker_entry)
                     self.get_logger().info(f"Saved marker transform and yaml entry.")
                     
                     self.keypress_publisher.publish(String(data='q'))
@@ -226,13 +227,13 @@ class MarkerReader(Node):
             if len(self.latest_points) < 2:
                 self.get_logger().info("Not enough data points for calibration.")
             else:
-                marker_entry1, enc_count1 = self.latest_points[-2]
-                marker_entry2, enc_count2 = self.latest_points[-1]
-                shared_markers = self.match_markers(marker_entry1, enc_count1, marker_entry2, enc_count2)
+                marker_entry1 = self.latest_points[-2]
+                marker_entry2 = self.latest_points[-1]
+                shared_markers = self.match_markers(marker_entry1, marker_entry2)
                 if shared_markers:
                     self.tracking_frame_calibrate(shared_markers)
 
-    def match_markers(self, marker_entry1, enc_count1, marker_entry2, enc_count2):
+    def match_markers(self, marker_entry1, marker_entry2):
         if marker_entry1 is None or marker_entry2 is None:
             self.get_logger().warning('One or both marker entries are missing for calibration.')
             return []
@@ -252,18 +253,15 @@ class MarkerReader(Node):
                 'marker_id': marker_id,
                 'entry1': {
                     'pose': m1['pose'],
-                    'encoder_count': enc_count1,
                 },
                 'entry2': {
                     'pose': m2['pose'],
-                    'encoder_count': enc_count2,
                 },
             })
 
         if matched_marker_data:
             self.get_logger().info(
-                f"Calibration data prepared for markers {', '.join(str(m['marker_id']) for m in matched_marker_data)} "
-                f"with encoder counts {enc_count1} and {enc_count2}."
+                f"Calibration data prepared for markers {', '.join(str(m['marker_id']) for m in matched_marker_data)}"
             )
         else:
             self.get_logger().info("No common marker_id found between the two latest datapoints.")
@@ -310,7 +308,7 @@ class MarkerReader(Node):
             float(quat[2]),
             float(quat[3]),
         ]
-        results_frames_file = self.image_folder.parent / 'results_frames.yaml'
+        results_frames_file = self.image_folder / 'results_frames.yaml'
 
         try:
             with open(results_frames_file, 'w') as yaml_file:
@@ -334,7 +332,7 @@ class MarkerReader(Node):
             self.get_logger().info("Encoder count is zero, something was wrong.")
         else:
             self.get_logger().info(f"Encoder count is non-zero: {msg.data}.")
-        self.latest_points.append((self.latest_marker_entry, msg.data))
+        # self.latest_points.append((self.latest_marker_entry, msg.data))
 
     def save_marker_data(self, marker_ids, rvecs, tvecs, image_filename=None):
         if marker_ids is None or rvecs is None or tvecs is None:
@@ -384,9 +382,13 @@ class MarkerReader(Node):
     def write_marker_data_yaml(self):
         try:
             with open(self.marker_data_file, 'w') as yaml_file:
-                yaml.safe_dump({'marker_entries': self.marker_entries}, yaml_file, sort_keys=False)
+                yaml.safe_dump(
+                    make_yaml_serializable({'marker_entries': self.marker_entries}),
+                    yaml_file,
+                    sort_keys=False
+                )
             self.get_logger().info(f'Wrote marker pose data to {self.marker_data_file}')
-        except OSError as exc:
+        except Exception as exc:
             self.get_logger().error(f'Failed to write marker data YAML: {exc}')
 
     def write_encoder_data_yaml(self):

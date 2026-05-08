@@ -1,6 +1,8 @@
 import tf2_ros
+import tf2_geometry_msgs
 from rclpy.duration import Duration
 from geometry_msgs.msg import Quaternion
+from builtin_interfaces.msg import Time
 
 import numpy as np
 import cv2
@@ -59,11 +61,13 @@ def rvec_to_quat(rvec):
     quat = r.as_quat()
     return quat
 
-def transform_pose_between_frames(pose, target_frame, tf_buffer, timeout=1.0):
+def transform_pose_between_frames(pose, target_frame, tf_buffer, timeout=5.0):
     try:
         # ---------------------------------------------------
-        # Wait until transform is available
+        # Use the latest available transform to avoid small
+        # timing skews and future-stamp extrapolation errors.
         # ---------------------------------------------------
+        pose.header.stamp = Time(sec=0, nanosec=0)
 
         can_transform = tf_buffer.can_transform(
             target_frame,
@@ -124,3 +128,31 @@ def construct_frame(pA, RA, pB):
 def quaternion_to_matrix(q: Quaternion):
     rot = Rotation.from_quat([q.x, q.y, q.z, q.w])
     return rot.as_matrix()
+
+def pose_stamped_to_list(pose_stamped):
+    return [
+        float(pose_stamped.pose.position.x),
+        float(pose_stamped.pose.position.y),
+        float(pose_stamped.pose.position.z),
+        float(pose_stamped.pose.orientation.x),
+        float(pose_stamped.pose.orientation.y),
+        float(pose_stamped.pose.orientation.z),
+        float(pose_stamped.pose.orientation.w)
+    ]
+
+
+def make_yaml_serializable(obj):
+    from geometry_msgs.msg import PoseStamped
+    if isinstance(obj, dict):
+        return {make_yaml_serializable(k): make_yaml_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [make_yaml_serializable(v) for v in obj]
+    if isinstance(obj, tuple):
+        return [make_yaml_serializable(v) for v in obj]
+    if isinstance(obj, PoseStamped):
+        return pose_stamped_to_list(obj)
+    if isinstance(obj, np.ndarray):
+        return make_yaml_serializable(obj.tolist())
+    if isinstance(obj, np.generic):
+        return obj.item()
+    return obj
