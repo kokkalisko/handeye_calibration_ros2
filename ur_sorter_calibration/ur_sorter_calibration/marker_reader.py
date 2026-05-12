@@ -4,6 +4,7 @@ from pathlib import Path
 
 import yaml
 from ur_sorter_calibration.utils import *
+from ur_sorter_calibration.calibration_algorithms import *
 
 import rclpy
 from rclpy.node import Node
@@ -20,35 +21,55 @@ class MarkerReader(Node):
     def __init__(self):
         super().__init__('marker_reader')
 
-        self.declare_parameter('flange_to_camera', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
-        self.declare_parameter('camera_optical_frame', '')
-        self.declare_parameter('flange_link', '')
+        self.get_logger().info("Initializing MarkerReader node...")
+
+        self.declare_parameter('sensor_station_calibration', False)
+        self.sensor_station_calibration = self.get_parameter('sensor_station_calibration').get_parameter_value().bool_value
+
+        # Declare and load parameters related to the marker detection and camera calibration
         self.declare_parameter('marker_dictionary_name', '')
         self.declare_parameter('marker_name', '')
         self.declare_parameter('marker_side_length', 0.1)
         self.declare_parameter('camera_calibration_parameters_filename', '')
-        self.declare_parameter('image_topic', '')
-        self.declare_parameter('base_link', 'base_link')
+        self.declare_parameter('sensor_station_calibration_parameters_filename', '')
 
         marker_dictionary_name = self.get_parameter('marker_dictionary_name').get_parameter_value().string_value
         self.marker_name = self.get_parameter('marker_name').get_parameter_value().string_value
         self.marker_side_length = self.get_parameter('marker_side_length').get_parameter_value().double_value
         self.camera_calibration_parameters_filename = self.get_parameter('camera_calibration_parameters_filename').get_parameter_value().string_value
-        self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
+        self.sensor_station_calibration_parameters_filename = self.get_parameter('sensor_station_calibration_parameters_filename').get_parameter_value().string_value
+
+        # Declare and load parameters related to the frames used
+        self.declare_parameter('flange_to_camera', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+        self.declare_parameter('camera_optical_frame', '')
+        self.declare_parameter('flange_link', '')
+        self.declare_parameter('base_link', 'base_link')
+
         flange_to_camera = self.get_parameter('flange_to_camera').get_parameter_value().double_array_value
         self.camera_optical_frame = self.get_parameter('camera_optical_frame').get_parameter_value().string_value
         self.flange_link = self.get_parameter('flange_link').get_parameter_value().string_value
         self.base_link = self.get_parameter('base_link').get_parameter_value().string_value
+
+        # Declare and load parameters related to the tracking frame calibration
+        self.declare_parameter('image_topic', '')
+        self.declare_parameter('tracking_frame_file', '')
+        self.declare_parameter('sensor_station_image_topic', '')
+        self.declare_parameter('encoder_scale_factor', 43.18)
+
+        self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
+        self.tracking_frame_file = self.get_parameter('tracking_frame_file').get_parameter_value().string_value
+        self.sensor_station_image_topic = self.get_parameter('sensor_station_image_topic').get_parameter_value().string_value
+        self.encoder_scale_factor = self.get_parameter('encoder_scale_factor').get_parameter_value().double_value
 
         # Check that we have a valid marker
         if MARKER_DICT.get(marker_dictionary_name, None) is None:
             self.get_logger().error(f"Marker tag of '{marker_dictionary_name}' is not supported")
             return
 
-        # Load the camera parameters from the saved file
+        # Load the (onboard) camera parameters from the saved file
         cv_file = cv2.FileStorage(self.camera_calibration_parameters_filename, cv2.FILE_STORAGE_READ)
-        self.mtx = cv_file.getNode('K').mat()
-        self.dst = cv_file.getNode('D').mat()
+        self.onboard_camera_mtx = cv_file.getNode('K').mat()
+        self.onboard_camera_dst = cv_file.getNode('D').mat()
         cv_file.release()
 
         # Load the marker dictionary
@@ -58,6 +79,19 @@ class MarkerReader(Node):
 
         # Create the image subscriber
         self.image_subscriber = self.create_subscription(Image, self.image_topic, self.listener_callback, 10)
+
+        # Create the second image subscriber if topic is provided
+        if self.sensor_station_image_topic and self.sensor_station_calibration:
+            self.second_image_subscriber = self.create_subscription(Image,
+                                                                    self.sensor_station_image_topic,
+                                                                    self.sensor_station_listener_callback, 10)
+            cv_file = cv2.FileStorage(self.camera_calibration_parameters_filename, cv2.FILE_STORAGE_READ)
+            self.sensor_camera_mtx = cv_file.getNode('K').mat()
+            self.sensor_camera_dst = cv_file.getNode('D').mat()
+            cv_file.release()
+
+        else:
+            self.second_image_subscriber = None
 
         # Create the encoder subscriber for synchronization (and synchronize with encoder reader)
         self.encoder_subscriber = self.create_subscription(Int32, 'encoder_count', self.encoder_callback, 10)
@@ -83,16 +117,16 @@ class MarkerReader(Node):
         self.image_filename_pattern = str(self.image_folder / 'image_{pose_count:04d}.png')
         self.marker_data_file = self.image_folder / 'marker_data.yaml'
         self.encoder_data_file = self.image_folder / 'encoder_data.yaml'
-        # self.open_image_folder()
 
         # Store the latest marker transform and encoder count for synchronization
         self.pose_count = 0
-        self.latest_marker_entry = None
         self.encoder_value = None
+
         self.marker_entries = []
         self.encoder_entries = []
-        self.latest_points = []
-        self.tracking_frame = None
+
+        if self.tracking_frame_file:
+            self.load_tracking_frame(self.tracking_frame_file)
 
     def publish_static_flange_to_camera(self, flange_to_camera):
         if len(flange_to_camera) != 7:
@@ -133,6 +167,22 @@ class MarkerReader(Node):
             f'Published static transform from {self.flange_link} to {self.camera_optical_frame}'
         )
 
+    def load_tracking_frame(self, filepath):
+        try:
+            with open(filepath, 'r') as yaml_file:
+                data = yaml.safe_load(yaml_file)
+                if data and 'tracking_frame' in data:
+                    frame_list = data['tracking_frame']
+                    if len(frame_list) == 7:
+                        trans = np.array(frame_list[0:3])
+                        quat = np.array(frame_list[3:7])
+                        self.tracking_frame = (trans, quat)
+                        self.get_logger().info(f"Loaded tracking_frame from {filepath}: Trans: {trans}, Quat: {quat}")
+                    else:
+                        self.get_logger().error(f"Invalid tracking_frame length in {filepath}")
+        except Exception as exc:
+            self.get_logger().error(f"Failed to load tracking_frame from {filepath}: {exc}")
+
     def create_image_output_folder(self):
         package_root = Path(__file__).resolve().parents[1]
         resource_root = package_root / 'resource'
@@ -162,7 +212,7 @@ class MarkerReader(Node):
 
         if marker_ids is not None:
             cv2.aruco.drawDetectedMarkers(current_frame, corners, marker_ids)
-            rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(corners, self.marker_side_length, self.mtx, self.dst)
+            rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(corners, self.marker_side_length, self.onboard_camera_mtx, self.onboard_camera_dst)
             
             for i, marker_id in enumerate(marker_ids):
                 # Create the coordinate transform
@@ -186,7 +236,7 @@ class MarkerReader(Node):
                 t_marker_to_camera.transform.rotation.w = quat[3]
 
                 # Draw the axes on the marker
-                cv2.drawFrameAxes(current_frame, self.mtx, self.dst, rvecs[i], tvecs[i], 0.05)
+                cv2.drawFrameAxes(current_frame, self.onboard_camera_mtx, self.onboard_camera_dst, rvecs[i], tvecs[i], 0.05)
 
                 # Send the transform from marker to the camera
                 self.tfbroadcaster.sendTransform(t_marker_to_camera)
@@ -199,39 +249,158 @@ class MarkerReader(Node):
         cv2.imshow("camera", current_frame)
         key = cv2.waitKey(1)
         if key == ord('q'):
-            # TODO: Check if not value is None before saving
-            # if rvecs is not None and tvecs is not None:
             if marker_ids is not None and len(marker_ids) > 0:
-                self.get_logger().info(f"Detected markers: {marker_ids}")
+                self.get_logger().info(f"Detected markers: {marker_ids} with onboard camera")
 
                 image_filename = self.image_filename_pattern.format(pose_count=self.pose_count)
-                marker_entry = self.save_marker_data(marker_ids, rvecs, tvecs, image_filename)
+                marker_entry = self.save_marker_data(marker_ids, rvecs, tvecs, image_filename, 'onboard')
 
                 if marker_entry is not None:
                     self.save_image(current_frame)
-                    self.latest_marker_entry = marker_entry
-                    self.latest_points.append(marker_entry)
                     self.get_logger().info(f"Saved marker transform and yaml entry.")
                     
-                    self.keypress_publisher.publish(String(data='q'))
                     self.pose_count += 1
+
+                    if self.sensor_station_calibration:
+                        self.keypress_publisher.publish(String(data='q'))
                 else:
                     self.get_logger().warning("Marker entry was None, skipping save and synchronization.")
+
+        elif key == ord('c'):
+            self.get_logger().info("Performing calibration with the last 2 datapoints...")
+            onboard_entries = [e for e in self.marker_entries if e['camera_source'] == 'onboard']
+            if len(onboard_entries) < 2:
+                self.get_logger().info("Not enough data points for calibration.")
+            else:
+
+                if not self.sensor_station_calibration:
+                    onboard_entries = [e for e in self.marker_entries if e['camera_source'] == 'onboard']
+                    if len(onboard_entries) < 2:
+                        self.get_logger().info("Not enough onboard camera data points for calibration.")
+                    else:
+                        marker_entry1 = onboard_entries[-2]
+                        marker_entry2 = onboard_entries[-1]
+                        shared_markers = self.match_markers(marker_entry1, marker_entry2)
+
+                        if not shared_markers:
+                            self.get_logger().info("No common markers found between the last two datapoints, cannot perform calibration.")
+                        else:
+                            trans, quat = tracking_frame_calibrate(shared_markers)
+                            self.get_logger().info(f"Tracking frame calibration result:")
+                            self.get_logger().info(f"Translation: {trans}")
+                            self.get_logger().info(f"Quaternion: {quat}")
+                            self.write_frame_yaml(trans, quat)
+                else:
+
+                    sensor_station_entries = [e for e in self.marker_entries if e['camera_source'] == 'sensor_station']
+                    onboard_entries = [e for e in self.marker_entries if e['camera_source'] == 'onboard']
+
+                    if len(sensor_station_entries) < 1:
+                        self.get_logger().info("No sensor station data points available for calibration.")
+                        return
+                    sensor_camera_entry = sensor_station_entries[-1]
+
+                    if len(onboard_entries) < 1:
+                        self.get_logger().info("No onboard camera data points available for calibration.")
+                        return
+                    onboard_camera_entry = onboard_entries[-1]
+
+                    if self.tracking_frame is None:
+                        self.get_logger().info("Tracking frame data is required for sensor station hand-eye calibration.")
+                        return
+
+                    encoder_counts = [
+                        sensor_camera_entry.get('encoder_count'),
+                        onboard_camera_entry.get('encoder_count')
+                    ]
+                    if None in encoder_counts:
+                        self.get_logger().info("Missing encoder values for sensor station or onboard marker entry.")
+                        return
+
+                    shared_markers = self.match_markers(sensor_camera_entry, onboard_camera_entry)
+
+                    if not shared_markers:
+                        self.get_logger().info("No common markers found between sensor station and onboard camera entries, cannot perform hand-eye calibration.")
+                        return
+
+                    trans, quat = sensor_station_hand_eye_calibrate(
+                        shared_markers,
+                        self.tracking_frame,
+                        np.array(encoder_counts, dtype=float),
+                        self.encoder_scale_factor
+                    )
+                    self.get_logger().info(f"Hand-eye calibration result:")
+                    self.get_logger().info(f"Translation: {trans}")
+                    self.get_logger().info(f"Quaternion: {quat}")
+                    self.write_frame_yaml(trans, quat, frame_name='hand_eye_calibration_frame')
+
         elif key == ord('e'):
             self.get_logger().info("Ending program...")
             self.keypress_publisher.publish(String(data='e'))
             cv2.destroyAllWindows()  # Close all OpenCV windows
             rclpy.shutdown()  # Shutdown ROS client library for Python
-        elif key == ord('t'):
-            self.get_logger().info("Performing calibration with the last 2 datapoints...")
-            if len(self.latest_points) < 2:
-                self.get_logger().info("Not enough data points for calibration.")
-            else:
-                marker_entry1 = self.latest_points[-2]
-                marker_entry2 = self.latest_points[-1]
-                shared_markers = self.match_markers(marker_entry1, marker_entry2)
-                if shared_markers:
-                    self.tracking_frame_calibrate(shared_markers)
+
+    def sensor_station_listener_callback(self, data):
+        try:
+
+            current_frame = self.bridge.imgmsg_to_cv2(data)
+            corners, marker_ids, rejected = cv2.aruco.detectMarkers(current_frame, self.this_marker_dictionary, parameters=self.this_marker_parameters)
+
+            if marker_ids is not None:
+                cv2.aruco.drawDetectedMarkers(current_frame, corners, marker_ids)
+                rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(corners, self.marker_side_length, self.sensor_camera_mtx, self.sensor_camera_dst)
+                
+                for i, marker_id in enumerate(marker_ids):
+                    # Create the coordinate transform
+                    t_marker_to_camera = TransformStamped()
+                    t_marker_to_camera.header.stamp = self.get_clock().now().to_msg()
+
+                    t_marker_to_camera.header.frame_id = self.camera_optical_frame
+                    t_marker_to_camera.child_frame_id = self.marker_name
+
+                    # Store the translation (i.e. position) information
+                    t_marker_to_camera.transform.translation.x = tvecs[i][0][0]
+                    t_marker_to_camera.transform.translation.y = tvecs[i][0][1]
+                    t_marker_to_camera.transform.translation.z = tvecs[i][0][2]
+
+                    quat = rvec_to_quat(rvecs[i])
+
+                    # Quaternion format
+                    t_marker_to_camera.transform.rotation.x = quat[0]
+                    t_marker_to_camera.transform.rotation.y = quat[1]
+                    t_marker_to_camera.transform.rotation.z = quat[2]
+                    t_marker_to_camera.transform.rotation.w = quat[3]
+
+                    # Draw the axes on the marker
+                    cv2.drawFrameAxes(current_frame, self.sensor_camera_mtx, self.sensor_camera_dst, rvecs[i], tvecs[i], 0.05)
+
+                    # Send the transform from marker to the camera
+                    self.tfbroadcaster.sendTransform(t_marker_to_camera)
+
+            cv2.namedWindow("sensor_station_camera", cv2.WINDOW_NORMAL)
+            cv2.resizeWindow("sensor_station_camera", 700, 500)
+            cv2.imshow("sensor_station_camera", current_frame)
+            key = cv2.waitKey(1)
+            if key == ord('s'):
+                if marker_ids is not None and len(marker_ids) > 0:
+                    self.get_logger().info(f"Detected markers: {marker_ids} with static camera")
+
+                    image_filename = self.image_filename_pattern.format(pose_count=self.pose_count)
+                    marker_entry = self.save_marker_data(marker_ids, rvecs, tvecs, image_filename, 'sensor_station')
+
+                    if marker_entry is not None:
+                        self.save_image(current_frame)
+                        self.get_logger().info(f"Saved marker transform and yaml entry.")
+                        
+                        self.pose_count += 1
+
+                        if self.sensor_station_calibration:
+                            self.keypress_publisher.publish(String(data='q'))
+                    else:
+                        self.get_logger().warning("Marker entry was None, skipping save and synchronization.")
+
+        except Exception as e:
+            self.get_logger().error(f"Error in second_listener_callback: {e}")
 
     def match_markers(self, marker_entry1, marker_entry2):
         if marker_entry1 is None or marker_entry2 is None:
@@ -253,9 +422,11 @@ class MarkerReader(Node):
                 'marker_id': marker_id,
                 'entry1': {
                     'pose': m1['pose'],
+                    'encoder_count': marker_entry1.get('encoder_count'),
                 },
                 'entry2': {
                     'pose': m2['pose'],
+                    'encoder_count': marker_entry2.get('encoder_count'),
                 },
             })
 
@@ -267,36 +438,6 @@ class MarkerReader(Node):
             self.get_logger().info("No common marker_id found between the two latest datapoints.")
 
         return matched_marker_data
-
-    def tracking_frame_calibrate(self, matched_markers):
-        # Select the first matched marker for calibration
-        marker_data = matched_markers[0]
-        marker_id = marker_data['marker_id']
-
-        # Extract the relevant data for calibration
-        first_point = marker_data['entry1']
-        second_point = marker_data['entry2']
-
-        pA = np.array([
-            first_point['pose'].pose.position.x,
-            first_point['pose'].pose.position.y,
-            first_point['pose'].pose.position.z])
-        RA = quaternion_to_matrix(first_point['pose'].pose.orientation)
-
-        pB = np.array([
-            second_point['pose'].pose.position.x,
-            second_point['pose'].pose.position.y,
-            second_point['pose'].pose.position.z])
-
-        # Construct the frame
-        trans, quat = construct_frame(pA, RA, pB)
-
-        self.get_logger().info(f"Tracking frame calibration result for marker:")
-        self.get_logger().info(f"Translation: {trans}")
-        self.get_logger().info(f"Quaternion: {quat}")
-
-        self.tracking_frame = (trans, quat)
-        self.write_frame_yaml(trans, quat)
 
     def write_frame_yaml(self, trans, quat, frame_name='tracking_frame'):
         frame_list = [
@@ -332,9 +473,8 @@ class MarkerReader(Node):
             self.get_logger().info("Encoder count is zero, something was wrong.")
         else:
             self.get_logger().info(f"Encoder count is non-zero: {msg.data}.")
-        # self.latest_points.append((self.latest_marker_entry, msg.data))
 
-    def save_marker_data(self, marker_ids, rvecs, tvecs, image_filename=None):
+    def save_marker_data(self, marker_ids, rvecs, tvecs, image_filename=None, camera_source='onboard'):
         if marker_ids is None or rvecs is None or tvecs is None:
             self.get_logger().warning('No marker pose data available to save.')
             return
@@ -372,6 +512,7 @@ class MarkerReader(Node):
             'image_file': image_filename,
             'marker_count': len(marker_list),
             'markers': marker_list,
+            'camera_source': camera_source,
         }
 
         self.marker_entries.append(entry)

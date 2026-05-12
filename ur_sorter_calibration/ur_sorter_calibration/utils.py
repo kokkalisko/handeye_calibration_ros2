@@ -103,28 +103,6 @@ def transform_pose_between_frames(pose, target_frame, tf_buffer, timeout=5.0):
 def normalize(v):
     return v / np.linalg.norm(v)
 
-def construct_frame(pA, RA, pB):
-    # Desired X direction
-    x = normalize(pB - pA)
-
-    # Z axis from frame A
-    z = normalize(RA[:, 2])
-
-    # Orthogonal Y
-    y = normalize(np.cross(z, x))
-
-    # Recompute orthogonal X
-    x = np.cross(y, z)
-
-    # Rotation matrix
-    R = np.column_stack((x, y, z))
-
-    # Quaternion    
-    r = Rotation.from_matrix(R)
-    quat = r.as_quat()  # [x
-
-    return pA, quat
-
 def quaternion_to_matrix(q: Quaternion):
     rot = Rotation.from_quat([q.x, q.y, q.z, q.w])
     return rot.as_matrix()
@@ -140,6 +118,21 @@ def pose_stamped_to_list(pose_stamped):
         float(pose_stamped.pose.orientation.w)
     ]
 
+def trans_list_to_matrix(trans_list):
+    # Extract translation and quaternion from the list    
+    translation = trans_list[:3]
+    quat = trans_list[3:]
+
+    # Convert quaternion to rotation matrix
+    r = Rotation.from_quat(quat)
+    R = r.as_matrix()
+
+    # Construct the homogeneous transformation matrix
+    trans_mat = np.eye(4)
+    trans_mat[:3, :3] = R
+    trans_mat[:3, 3] = translation
+
+    return trans_mat
 
 def make_yaml_serializable(obj):
     from geometry_msgs.msg import PoseStamped

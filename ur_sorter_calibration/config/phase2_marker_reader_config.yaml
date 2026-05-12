@@ -1,0 +1,16 @@
+/**:
+  ros__parameters:
+    sensor_station_calibration: true
+    flange_to_camera: [0.013397114356910255, -0.08060621902874068,0.010832529037551192, 0.00168, -0.02757, 0.16260, 0.98698]
+    base_link: "base_link"
+    flange_link: "tool0"
+    camera_optical_frame: "camera/color/optical_frame"
+    marker_dictionary_name: "DICT_APRILTAG_36h11"
+    marker_side_length: 0.100
+    camera_calibration_parameters_filename: /home/konstantinos/handeye_calibration_ros2/handeye_realsense/config/realsense_info.yaml
+    image_topic: "/camera/camera/color/image_raw"
+    marker_name: "marker"
+
+    sensor_station_calibration_parameters_filename: /home/konstantinos/handeye_calibration_ros2/ur_sorter_calibration/config/sensor_station_calibration_parameters.yaml
+    sensor_station_image_topic: "/camera/camera/color/image_raw"
+    tracking_frame_file: /home/konstantinos/handeye_calibration_ros2/ur_sorter_calibration/resource/marker_images_20260508_095525/results_frames.yaml
