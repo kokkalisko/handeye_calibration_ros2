@@ -8,7 +8,7 @@ from rclpy.node import Node
 import cv2
 import numpy as np
 import yaml
-from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Rotation
 import os
 
 class HandEyeCalibrationNode(Node):
@@ -76,12 +76,12 @@ class HandEyeCalibrationNode(Node):
     
     def rotation_matrix_to_quaternion(self, matrix):
         """Convert a 3x3 rotation matrix into a quaternion."""
-        rotation = R.from_matrix(matrix)
+        rotation = Rotation.from_matrix(matrix)
         return rotation.as_quat()
 
     def save_yaml(self, R, t):
         '''This function will always show only the updated result'''
-        new_data = {'rotation': R.flatten().tolist(), 'translation': t.flatten().tolist()}
+        new_data = {'rotation': Rotation.from_matrix(R).as_quat().tolist(), 'translation': t.flatten().tolist()}
 
         # Write the new data to the YAML file, overwriting any existing content
         with open(self.handeye_result_file_name, 'w') as file:
@@ -93,7 +93,7 @@ class HandEyeCalibrationNode(Node):
         
     def save_yaml_profile(self, R, t):
         '''This function saves the rotation and translation data in the correct format.'''
-        new_data = {'rotation': R.flatten().tolist(), 'translation': t.flatten().tolist()}
+        new_data = {'rotation': Rotation.from_matrix(R).as_quat().tolist(), 'translation': t.flatten().tolist()}
 
         # Check if the file exists and is not empty
         if os.path.exists(self.handeye_result_profile_file_name) and os.path.getsize(self.handeye_result_profile_file_name) > 0:
@@ -115,7 +115,7 @@ class HandEyeCalibrationNode(Node):
             yaml.safe_dump(existing_data, file)
 
         self.get_logger().info("Simulated hand-eye calibration results saved.")
-        print(f"Rotation matrix quaternion: {R}")
+        print(f"Rotation matrix quaternion: {Rotation.from_matrix(R).as_quat()}")
         print(f"Translation vector: {t}")
 
 
