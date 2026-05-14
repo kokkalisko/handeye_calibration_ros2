@@ -72,8 +72,7 @@ def transform_poses_to_tracking_frame(robot_poses, robot_to_tracking_trans, enco
 
     # Get the robot world to tracking frame transformation matrix
     trans, quat = robot_to_tracking_trans
-    r = Rotation.from_quat(quat)
-    R = r.as_matrix()
+    R = Rotation.from_quat(quat).as_matrix()
     robot_to_tracking_mat = np.eye(4)
     robot_to_tracking_mat[:3, :3] = R
     robot_to_tracking_mat[:3, 3] = trans
@@ -133,10 +132,6 @@ def calculate_rmsd(P, Q, R):
     P_rotated = P_centered @ R
     return np.sqrt(np.mean(np.sum((P_rotated - Q_centered) ** 2, axis=1)))
 
-def transform_poses_to_camera_frame(matched_markers):
-    # Implementation for transforming poses to camera frame
-    pass
-
 def sensor_station_hand_eye_calibrate(matched_markers, robot_to_tracking_trans, encoder_values, scale_factor):
     """
     Calibrate the hand-eye transformation for the sensor station using the Kabsch algorithm.
@@ -165,12 +160,35 @@ def sensor_station_hand_eye_calibrate(matched_markers, robot_to_tracking_trans, 
     transformed_robot_positions = transform_poses_to_tracking_frame(robot_positions, robot_to_tracking_trans, encoder_values, scale_factor)
 
     # Deploy Kabsch algorithm to find the optimal rotation and translation
+    # We calculated the camera to tracking transformation
     R, t = kabsch_algorithm(transformed_robot_positions, camera_positions)
 
     # Calculate RMSD to evaluate the quality of the transformation
     rmsd = calculate_rmsd(camera_positions, transformed_robot_positions, R)
 
     # Convert rotation matrix to quaternion
+    H = np.eye(4)
+    H[:3, :3] = R
+    H[:3, 3] = t
+
+    # Construct the transformation from robot world to tracking frame
+    trans, quat = robot_to_tracking_trans
+    r = Rotation.from_quat(quat)
+    R_tracking = r.as_matrix()
+    robot_to_tracking_mat = np.eye(4)
+    robot_to_tracking_mat[:3, :3] = R_tracking
+    robot_to_tracking_mat[:3, 3] = trans
+
+    # Compute the transformation from tracking frame to robot world frame
+    tracking_to_robot = np.eye(4)
+    tracking_to_robot[:3, :3] = np.linalg.inv(robot_to_tracking_mat[:3, :3])
+    tracking_to_robot[:3, 3] = -np.dot(np.linalg.inv(robot_to_tracking_mat[:3, :3]), robot_to_tracking_mat[:3, 3])
+
+    camera_to_robot = H@tracking_to_robot
+
+    # Extract the translation and rotation from the camera_to_robot transformation
+    t = camera_to_robot[:3, 3]
+    R = camera_to_robot[:3, :3]
     r = Rotation.from_matrix(R)
     quat = r.as_quat()  # [x, y, z, w]
 
